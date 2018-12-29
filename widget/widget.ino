@@ -41,16 +41,65 @@ int status = WL_IDLE_STATUS;
 unsigned long lastTransmit=0;
 unsigned short localPort = 1234;// local port to listen for UDP packets
 unsigned short destPort = 1234;
-const char* serverIP = "raspberrypi";
+char serverAddr[512];
 byte macAddressHex[6];
 char macAddress[13];
 char ssid[500];
 char passwd[500];
 byte packetBuffer[512]; //buffer to hold incoming and outgoing packets
-char* hex="0123456789ABCDEF";
 
 // A UDP instance to let us send and receive packets over UDP
 WiFiUDP Udp;
+
+int writeCredentials(int argc, char** argv){
+	int i,j,index = 0;
+	Serial.println("writing credentials");
+	Serial.print("argc:");
+	Serial.println(argc);
+	EEPROM.begin(512);
+	for(i=0;i<argc;i++){
+		Serial.print("i:");
+		Serial.println(i);
+		Serial.print("argv[i]:");
+		Serial.println(argv[i]);
+		Serial.print("strlen(argv[i]):");
+		Serial.println(strlen(argv[i]));
+		for(j=0;j<strlen(argv[i]) && index < 512;j++){
+			EEPROM.write(index,argv[i][j]);
+			index++;
+			Serial.print("EEPROM.write:");
+			Serial.println(argv[i][j]);
+		}
+		if(i != argc-1){
+			EEPROM.write(index,'-');
+			index++;
+			Serial.print("EEPROM.write:");
+			Serial.println('-');
+		}
+	}
+	EEPROM.write(index,'\0');
+	index++;
+	Serial.print("EEPROM.write:");
+	Serial.println("\\0");
+	EEPROM.write(index,' ');
+	index++;
+	Serial.print("EEPROM.write:");
+	Serial.println(" ");
+	EEPROM.commit();
+	digitalWrite(LED,0);
+	Serial.print("Rebooting...");
+	delay(1000);
+	ESP.restart();
+	return 0;
+}
+
+struct command{
+	const char* keyword;
+	int (*runCommand) (int argc, char** argv);
+};
+const struct command commands[]={
+	(struct command) { "wifi", &writeCredentials}
+};
 
 void getMac(){
 	WiFi.macAddress(macAddressHex);
@@ -106,48 +155,46 @@ void handleUDP(){
 }
 
 int checkForCredentials(){
-	int i,numParts;
+	int i,argc;
 	char* buff = (char*) malloc(512);
-	char *strptr;
-	char* parts[3];
+	char* argv[4];
 	const char* keyword="wifi";
 	EEPROM.begin(512);
 	Serial.println("checking for stored credentials");
+	Serial.print("EEPROM contents:");
 	for(i = 0; i<512; i++){
 		buff[i]=EEPROM.read(i);
+		Serial.print(buff[i]);
 	}
+	Serial.println();
 	buff[i] = '\0';
-	strptr = buff;
-	for(i=0; i<3;){
-		parts[i] = strsep(&strptr,"-");
-		if( parts[i] != NULL){
-			i++;
-		}
-		else{
-			break;
-		}
-	}
-	numParts = i;
+	argc = tokeniseStr(buff, argv, sizeof(argv)/sizeof(char*), "-");
+	Serial.print("argc:");
+	Serial.println(argc);
 	if(strcmp(buff, keyword)==0){
-		if(numParts == 3){
-			strcpy(ssid,parts[1]);
-			strcpy(passwd,parts[2]);
+		if(argc == 4){
+			strcpy(ssid,argv[1]);
+			strcpy(passwd,argv[2]);
+			strcpy(serverAddr,argv[3]);
 			free(buff);
 			return 1;
 		}
 		else{
-			Serial.println("malformed expression:\"wifi\"-[SSID]-[PASSWORD]");
+			Serial.println("malformed expression:\"wifi\"-[SSID]-[PASSWORD]-[SERVERADDR]");
 			free(buff);
 			return 0;
 		}
 	
 	}
+	EEPROM.end();
 	free(buff);
 	return 0;
 }
 
+
 void serialRead(char* buff, int bufflen){
 	int i;
+	Serial.println("reading from serial");
 	for(i=0; i < bufflen; i++){
 		while(Serial.available() == 0 )
 			;
@@ -158,51 +205,60 @@ void serialRead(char* buff, int bufflen){
 	buff[i] = '\0';
 }
 
-void waitForCredentials(){
+int tokeniseStr(char* buff, char** parts, int lenParts, char* sep){
+	int i;
+	char* strptr = buff;
+	Serial.println("tokenising string");
+	for(i=0; i<lenParts;){
+		parts[i] = strsep(&strptr,sep);
+		if( parts[i] != NULL){
+			Serial.print("parts[i]:");
+			Serial.println(parts[i]);
+			i++;
+		}
+		else{
+			break;
+		}
+	}
+	return i;
+}
+
+// Returns a function pointer to the runCommand function for that command
+// Returns type is int(*) (int, char**)
+// Takes int argc, char** argv as arguments
+int(*parseCommand(int argc, char** argv))(int,char**) {
+	int i,numCommands;
+	Serial.println("parsing command");
+	numCommands = sizeof(commands)/sizeof(command);
+	for(i = 0; i< numCommands;i++){
+		if(strcmp(argv[0],commands[i].keyword)==0){
+			Serial.println("command found");
+			return commands[i].runCommand;
+		}
+	}
+	Serial.println("command not found");
+	return NULL;
+}
+
+//wait on commands from serial
+void serialSlave(){
 	char* buff = (char*) malloc(512);
 	const char* keyword="wifi";
-	EEPROM.begin(512);
 	Serial.println();
-	Serial.println("waiting for credentials");
+	Serial.println("serialSlave started");
 	digitalWrite(LED,1);
 	while(true){
-		char *strptr;
-		int i,numParts;
-		char* parts[3];
+		int i,argc;
+		char* argv[5];
+		int (*runCommand) (int argc, char** argv);
 		serialRead(buff, 512);
-		strptr = buff;
-		for(i=0; i<3;){
-			parts[i] = strsep(&strptr,"-");
-			if( parts[i] != NULL){
-				i++;
-			}
-			else{
-				break;
-			}
+		argc = tokeniseStr(buff, argv, sizeof(argv)/sizeof(char*), "-");
+		runCommand = parseCommand(argc, argv);
+		if(runCommand != NULL){
+			runCommand(argc, argv);
 		}
-		numParts = i;
-		if(strcmp(buff, keyword)==0){
-			if(numParts == 3){
-				int j,index=0;
-				for(i=0;i<numParts;i++){
-					for(j=0;j<strlen(parts[i]);j++){
-						EEPROM.write(index,parts[i][j]);
-						index++;
-					}
-					if(i != numParts-1){
-						EEPROM.write(index,'-');
-					}
-					index++;
-				}
-				EEPROM.write(index,'\0');
-				EEPROM.commit();
-				free(buff);
-				digitalWrite(LED,0);
-				ESP.restart();
-			}
-			else{
-				Serial.println("malformed expression:\"wifi\"-[SSID]-[PASSWORD]");
-			}
+		else{
+			Serial.println("command not found");
 		}
 		delay(100);
 	}
@@ -221,8 +277,9 @@ void setup(){
 	pinMode(LED, OUTPUT);
 	ssid[0]='\0';
 	passwd[0]='\0';
+	serverAddr[0]='\0';
 	if(digitalRead(BUTTON)==0){
-		waitForCredentials();
+		serialSlave();
 	}
 	else if(checkForCredentials()){
 		Serial.println("credentials found");
@@ -230,8 +287,8 @@ void setup(){
 		Udp.begin(localPort);
 	}
 	else{
-		Serial.print("no stored credentials found");
-		waitForCredentials();
+		Serial.print("no stored credentials found, going into serialSlave mode");
+		serialSlave();
 	}
 }
 
@@ -257,7 +314,7 @@ void loop(){
 
 	delay(100);
 	//send motion
-	Udp.beginPacket(serverIP, destPort);
+	Udp.beginPacket(serverAddr, destPort);
 	Udp.print(macAddress);
 	Udp.print("-");
 	Udp.print("motion-");
@@ -266,7 +323,7 @@ void loop(){
 
 	delay(100);
 	//send temperature
-	Udp.beginPacket(serverIP, destPort);
+	Udp.beginPacket(serverAddr, destPort);
 	Udp.print(macAddress);
 	Udp.print("-");
 	Udp.print("temperature-");
@@ -275,7 +332,7 @@ void loop(){
 
 	delay(100);
 	//send light level
-	Udp.beginPacket(serverIP, destPort);
+	Udp.beginPacket(serverAddr, destPort);
 	Udp.print(macAddress);
 	Udp.print("-");
 	Udp.print("light-");

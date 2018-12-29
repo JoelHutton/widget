@@ -53,43 +53,36 @@ WiFiUDP Udp;
 
 int writeCredentials(int argc, char** argv){
 	int i,j,index = 0;
-	Serial.println("writing credentials");
-	Serial.print("argc:");
-	Serial.println(argc);
 	EEPROM.begin(512);
 	for(i=0;i<argc;i++){
-		Serial.print("i:");
-		Serial.println(i);
-		Serial.print("argv[i]:");
-		Serial.println(argv[i]);
-		Serial.print("strlen(argv[i]):");
-		Serial.println(strlen(argv[i]));
 		for(j=0;j<strlen(argv[i]) && index < 512;j++){
 			EEPROM.write(index,argv[i][j]);
 			index++;
-			Serial.print("EEPROM.write:");
-			Serial.println(argv[i][j]);
 		}
 		if(i != argc-1){
 			EEPROM.write(index,'-');
 			index++;
-			Serial.print("EEPROM.write:");
-			Serial.println('-');
 		}
 	}
 	EEPROM.write(index,'\0');
 	index++;
-	Serial.print("EEPROM.write:");
-	Serial.println("\\0");
-	EEPROM.write(index,' ');
-	index++;
-	Serial.print("EEPROM.write:");
-	Serial.println(" ");
 	EEPROM.commit();
+	EEPROM.end();
 	digitalWrite(LED,0);
-	Serial.print("Rebooting...");
-	delay(1000);
+	Serial.print("credentials written, rebooting...");
 	ESP.restart();
+	return 0;
+}
+
+int clearEEPROM(int argc, char** argv){
+	int i;
+	Serial.println("clearing EEPROM");
+	EEPROM.begin(512);
+	for(i=0; i<512 ; i++){
+		EEPROM.write(i,'\0');
+	}
+	EEPROM.commit();
+	EEPROM.end();
 	return 0;
 }
 
@@ -98,7 +91,8 @@ struct command{
 	int (*runCommand) (int argc, char** argv);
 };
 const struct command commands[]={
-	(struct command) { "wifi", &writeCredentials}
+	(struct command) { "wifi", &writeCredentials},
+	(struct command) { "clear", &clearEEPROM}
 };
 
 void getMac(){
@@ -108,28 +102,23 @@ void getMac(){
 }
 
 void connectToRouter(){
-	if(ssid != NULL && passwd != NULL){
-		// Wait for connection to AP
-		Serial.print("[Connecting]");
-		Serial.print(ssid);
-		Serial.print(",");
-		Serial.print(passwd);
-		WiFi.mode(WIFI_STA);
-		WiFi.begin(ssid, passwd);
-		int tries=0;
-		while(WiFi.status() != WL_CONNECTED) {
-			delay(500);
-			Serial.print(".");
-			tries++;
-			if (tries > 30){
-				break;
-			}
+	// Wait for connection to AP
+	Serial.print("[Connecting]");
+	Serial.print(ssid);
+	Serial.print(",");
+	Serial.print(passwd);
+	WiFi.mode(WIFI_STA);
+	WiFi.begin(ssid, passwd);
+	int tries=0;
+	while(WiFi.status() != WL_CONNECTED) {
+		delay(500);
+		Serial.print(".");
+		tries++;
+		if (tries > 30){
+			break;
 		}
-		Serial.println();
 	}
-	else{
-		Serial.println("null pointers for ssid and/or passwd");
-	}
+	Serial.println();
 	Serial.print("my ip:");
 	Serial.println(WiFi.localIP());
 }
@@ -161,7 +150,6 @@ int checkForCredentials(){
 	const char* keyword="wifi";
 	EEPROM.begin(512);
 	Serial.println("checking for stored credentials");
-	Serial.print("EEPROM contents:");
 	for(i = 0; i<512; i++){
 		buff[i]=EEPROM.read(i);
 		Serial.print(buff[i]);
@@ -169,8 +157,6 @@ int checkForCredentials(){
 	Serial.println();
 	buff[i] = '\0';
 	argc = tokeniseStr(buff, argv, sizeof(argv)/sizeof(char*), "-");
-	Serial.print("argc:");
-	Serial.println(argc);
 	if(strcmp(buff, keyword)==0){
 		if(argc == 4){
 			strcpy(ssid,argv[1]);
@@ -180,7 +166,7 @@ int checkForCredentials(){
 			return 1;
 		}
 		else{
-			Serial.println("malformed expression:\"wifi\"-[SSID]-[PASSWORD]-[SERVERADDR]");
+			Serial.println("malformed expression in EEPROM");
 			free(buff);
 			return 0;
 		}
@@ -194,7 +180,7 @@ int checkForCredentials(){
 
 void serialRead(char* buff, int bufflen){
 	int i;
-	Serial.println("reading from serial");
+	Serial.println("READY");
 	for(i=0; i < bufflen; i++){
 		while(Serial.available() == 0 )
 			;
@@ -205,15 +191,12 @@ void serialRead(char* buff, int bufflen){
 	buff[i] = '\0';
 }
 
-int tokeniseStr(char* buff, char** parts, int lenParts, char* sep){
+int tokeniseStr(char* buff, char** argv, int argc, char* sep){
 	int i;
 	char* strptr = buff;
-	Serial.println("tokenising string");
-	for(i=0; i<lenParts;){
-		parts[i] = strsep(&strptr,sep);
-		if( parts[i] != NULL){
-			Serial.print("parts[i]:");
-			Serial.println(parts[i]);
+	for(i=0; i<argc;){
+		argv[i] = strsep(&strptr,sep);
+		if( argv[i] != NULL){
 			i++;
 		}
 		else{
@@ -228,11 +211,9 @@ int tokeniseStr(char* buff, char** parts, int lenParts, char* sep){
 // Takes int argc, char** argv as arguments
 int(*parseCommand(int argc, char** argv))(int,char**) {
 	int i,numCommands;
-	Serial.println("parsing command");
 	numCommands = sizeof(commands)/sizeof(command);
 	for(i = 0; i< numCommands;i++){
 		if(strcmp(argv[0],commands[i].keyword)==0){
-			Serial.println("command found");
 			return commands[i].runCommand;
 		}
 	}
@@ -255,7 +236,12 @@ void serialSlave(){
 		argc = tokeniseStr(buff, argv, sizeof(argv)/sizeof(char*), "-");
 		runCommand = parseCommand(argc, argv);
 		if(runCommand != NULL){
-			runCommand(argc, argv);
+			if(runCommand(argc, argv)==0){
+				Serial.println("command executed successfully");
+			}
+			else{
+				Serial.println("command failed");
+			}
 		}
 		else{
 			Serial.println("command not found");

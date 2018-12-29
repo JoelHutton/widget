@@ -18,9 +18,9 @@ using the search box.
 
 # Programming WiFi access point into the device
 To program a WiFi access SSID and Password into the device, hold the button
-while resetting the device, the serial monitor should show 'waiting for credentials'
+while resetting the device, the serial monitor should show 'serialSlave started'
 and the LED should light up. Send the credentials in the following format:
-wifi-[SSID]-[Password]
+wifi-[SSID]-[Password]-[Server address]
 
 # Setting up the server
 The server logs messages in the database, the database file must be created using create_db.py

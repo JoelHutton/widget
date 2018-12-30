@@ -37,8 +37,6 @@ DallasTemperature sensors(&oneWire);
 
 
 int status = WL_IDLE_STATUS;
-//time last readings were sent (in milliseconds since startup)
-unsigned long lastTransmit=0;
 unsigned short localPort = 1234;// local port to listen for UDP packets
 unsigned short destPort = 1234;
 char serverAddr[512];
@@ -170,7 +168,6 @@ int checkForCredentials(){
 			free(buff);
 			return 0;
 		}
-	
 	}
 	EEPROM.end();
 	free(buff);
@@ -264,6 +261,8 @@ void setup(){
 	ssid[0]='\0';
 	passwd[0]='\0';
 	serverAddr[0]='\0';
+	Serial.print("Hi, I'm a widget, and my name is ");
+	Serial.println(macAddress);
 	if(digitalRead(BUTTON)==0){
 		serialSlave();
 	}
@@ -280,56 +279,37 @@ void setup(){
 
 unsigned long lastPrint=0;
 void loop(){
+	DeviceAddress sensor;
+	int i,j;
+	float tempC;
 	delay(10);
-
-	sensors.requestTemperatures(); // Send the command to get temperatures
-	float temp=sensors.getTempCByIndex(0);
-	int motion=digitalRead(MOTION_PIN);
-	int light=analogRead(A0);
-	String tempString= String(temp);
-	String motionString= String(motion);
-	String lightString= String(light);
-	Serial.print(" motion:");
-	Serial.print(motionString);
-	Serial.print(" light:");
-	Serial.print(lightString);
-	Serial.print(" button:");
-	Serial.print(digitalRead(BUTTON));
-	Serial.print(" temperature:");
-	Serial.println(tempString);
-
-	delay(100);
-	//send motion
-	Udp.beginPacket(serverAddr, destPort);
-	Udp.print(macAddress);
-	Udp.print("-");
-	Udp.print("motion-");
-	Udp.print(motionString);
-	Udp.endPacket();
-
-	delay(100);
-	//send temperature
-	Udp.beginPacket(serverAddr, destPort);
-	Udp.print(macAddress);
-	Udp.print("-");
-	Udp.print("temperature-");
-	Udp.print(tempString);
-	Udp.endPacket();
-
-	delay(100);
-	//send light level
-	Udp.beginPacket(serverAddr, destPort);
-	Udp.print(macAddress);
-	Udp.print("-");
-	Udp.print("light-");
-	Udp.print(lightString);
-	Udp.endPacket();
-
-	Serial.println("waiting for response from server");
-	long unsigned int startedWaiting=millis();
-	while(millis()-startedWaiting < 5000){
-		handleUDP();
-		//so wifi stack doesn't fail
-		delay(10);
+	sensors.requestTemperatures();
+	for(i=0; i < sensors.getDeviceCount(); i++){
+		for(j=0; j<8; j++){
+			sensor[j]=0;
+		}
+		sensors.getAddress(sensor,i);
+		tempC = sensors.getTempC(sensor);
+		Udp.beginPacket(serverAddr, destPort);
+		Udp.print(macAddress);
+		Udp.print("-");
+		for(j=0; j<8; j++){
+			Serial.print(sensor[j], HEX);
+			Udp.print(sensor[j],HEX);
+		}
+		Serial.println();
+		Udp.print("-");
+		Udp.print(String(tempC));
+		Serial.println(String(tempC));
+		Udp.endPacket();
 	}
+	Serial.println();
+	delay(1000);
+	//Serial.println("waiting for response from server");
+	//long unsigned int startedWaiting=millis();
+	//while(millis()-startedWaiting < 5000){
+	//	handleUDP();
+	//	//so wifi stack doesn't fail
+	//	delay(10);
+	//}
 }
